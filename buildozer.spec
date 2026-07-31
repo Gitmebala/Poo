@@ -17,9 +17,11 @@ icon.filename = %(source.dir)s/assets/icon.png
 
 android.permissions = VIBRATE,SYSTEM_ALERT_WINDOW
 
-# :sticky asks Android to restart the service if it gets killed, which is what
-# keeps her listening for a shake after she has been tucked away
-android.services = floatpoo:service/floatpoo.py:sticky
+# Restarting after Android kills the service is handled in code, by calling
+# setAutoRestartService(True) in service/floatpoo.py. Do not add a :sticky
+# suffix here - older python-for-android splits this on the first colon only
+# and would treat "service/floatpoo.py:sticky" as the filename.
+android.services = floatpoo:service/floatpoo.py
 
 android.api = 33
 android.minapi = 24
