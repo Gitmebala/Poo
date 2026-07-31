@@ -4,14 +4,15 @@ Poo - creature simulation.
 The renderer never asks for a pose. It asks the simulation what Poo is doing,
 and a pose falls out of that. Underneath there are drives that drift on their
 own, a memory that persists between sessions, idle behaviours that fire when
-nobody is watching, and a physics body with real gravity, bounce and friction.
+nobody is watching, and a pendulum body: she hangs from a string anchored
+above the screen and swings the way a real pendant does when the phone tilts.
 
 Layers, outermost first:
   drives     - happiness / energy / sleepiness / curiosity / affection
   memory     - how she has been treated, saved to disk
   behaviour  - scripted little acts chosen from mood + randomness
-  physics    - gravity, bounce, squash, slide, roll, settle
-  secondary  - springs that lag behind the body (lean, jiggle, gaze)
+  physics    - a damped pendulum, driven by device tilt and by flings
+  secondary  - springs that lag behind the body (lean, jiggle, gaze, rig)
 """
 import json
 import math
@@ -53,19 +54,21 @@ def resolve_poses():
 
 
 # --------------------------------------------------------------- tuning ----
-GRAVITY = -2100.0        # px/s^2, y-up
-RESTITUTION = 0.42       # energy kept per bounce
-FRICTION = 0.86          # horizontal damping while touching the floor
-AIR_DRAG = 0.35
-TILT_ACCEL = 1500.0      # how hard a tilted phone pushes her sideways
-ROLL_SPEED = 220.0       # |vx| above this and she rolls instead of sliding
-SETTLE_SPEED = 55.0
+# Pendulum: she hangs from a string anchored just above the top of the screen.
+# Tilting the phone rotates gravity relative to the phone's own frame, which is
+# what actually makes a real pendant swing when you tilt something it's
+# hanging from - so tilt becomes the equilibrium angle she swings toward.
+ANGULAR_G = 1500.0       # how hard she swings back toward "down"
+DAMPING = 1.15           # how fast the swing settles
+MAX_OMEGA = 6.0          # rad/s cap so a hard fling can't spin her wildly
+TILT_INFLUENCE = 1.0     # how directly phone tilt shifts her equilibrium
+STRING_SLACK = 26.0      # px the anchor sits above the visible top edge
+FOLLOW_RATE = 20.0       # how snappily she tracks a dragging finger
 CROSSFADE = 0.18
-SPLAT_SPEED = 1500.0     # impact speed that flattens her
 
-BLINK_MIN, BLINK_MAX = 2.0, 8.0
-IDLE_ACT_MIN, IDLE_ACT_MAX = 18.0, 70.0
-SLEEPY_AFTER = 75.0
+BLINK_MIN, BLINK_MAX = 2.5, 9.0
+IDLE_ACT_MIN, IDLE_ACT_MAX = 30.0, 100.0     # slower, so acts don't crowd each other
+SLEEPY_AFTER = 90.0
 DIZZY_SHAKES = 4
 
 
@@ -185,15 +188,16 @@ class Poo:
         self.drives = Drives()
 
         self.t = 0.0
-        self.x = self.W * 0.5
-        self.y = self.H * 0.62
         self.body_h = 330.0        # the renderer overwrites this with her real size
-        self.vx = 0.0
-        self.vy = 0.0
-        self.on_ground = False
+
+        # pendulum state
+        self.anchor_x = self.W * 0.5
+        self.string_len = min(230.0, self.H * 0.32)
+        self.theta = 0.02           # radians from straight-down
+        self.omega = 0.0            # angular velocity
+        self.tilt = 0.0             # device tilt, radians
         self.held = False
-        self.tilt = 0.0
-        self.spin = 0.0            # rolling rotation, degrees
+        self.x, self.y = self._pendulum_pos()
 
         self.squash = Spring(1.0, k=260, c=12)
         self.lean = Spring(0.0, k=110, c=9)      # body lag / secondary motion
@@ -223,7 +227,6 @@ class Poo:
         self.speech = ""
         self.speech_until = -1.0
         self._next_mutter = 40.0
-        self._next_flick = 5.0
 
         self._greet()
 
@@ -401,10 +404,11 @@ class Poo:
         self.shake_times.append(self.t)
         self.drives.jostle()
         self.memory.data["shakes"] += 1
-        self.vy += random.uniform(500, 800)
-        self.vx += random.uniform(-320, 320)
-        self.on_ground = False
+        self.omega = clamp(self.omega + random.choice([-1, 1]) * random.uniform(2.6, 4.4),
+                           -MAX_OMEGA, MAX_OMEGA)
         self.jiggle.nudge(22.0)
+        self.ear_l.nudge(random.uniform(-30, 30))
+        self.ear_r.nudge(random.uniform(-30, 30))
 
         if len(self.shake_times) >= DIZZY_SHAKES:
             self.dizzy_until = self.t + 5.0
@@ -415,16 +419,27 @@ class Poo:
     def grab(self, x, y):
         self._mark()
         self.held = True
-        self.vx = self.vy = 0.0
+        self.x, self.y = x, y
         self.set_pose("surprised", fade=0.08)
         self.behaviour = None
 
     def release(self, vx, vy):
+        """
+        Released mid-air, from wherever your finger let go. The anchor moves
+        to sit directly above the release point and the string is whatever
+        length reaches her from there, so she keeps swinging naturally from
+        where you actually let go rather than snapping back to center.
+        """
         self.held = False
-        self.vx = clamp(vx, -2000, 2000)
-        self.vy = clamp(vy, -2000, 2000)
-        self.on_ground = False
-        if abs(self.vx) > 700 or self.vy > 500:
+        anchor_y = self.H + STRING_SLACK
+        self.anchor_x = clamp(self.x, self.W * 0.08, self.W * 0.92)
+        self.string_len = clamp(anchor_y - self.y, 50.0, self.H * 1.4)
+        dx = self.x - self.anchor_x
+        self.theta = math.atan2(dx, max(anchor_y - self.y, 1.0))
+        # a fling imparts spin around the anchor, not a straight-line toss
+        tangential = vx * math.cos(self.theta) - (-vy) * math.sin(self.theta)
+        self.omega = clamp(tangential / max(self.string_len, 1.0), -MAX_OMEGA, MAX_OMEGA)
+        if abs(vx) > 900 or abs(vy) > 900:
             self.memory.data["drops"] += 1
             self.start_behaviour(self._b_thrown(), force=True)
 
@@ -473,10 +488,9 @@ class Poo:
     def _b_dizzy(self):
         def wobble():
             self.lean.nudge(70.0)
-            self.say("@_@", 2.2)
         return Behaviour("dizzy", [
             ("surprised", 1.2, wobble),
-            ("splat", 1.4, None),
+            ("surprised", 1.4, lambda: self.lean.nudge(-50.0)),
             ("curious", 0.8, None),
         ], interruptible=False)
 
@@ -488,7 +502,7 @@ class Poo:
 
     def _b_thrown(self):
         return Behaviour("thrown", [
-            ("falling", 0.6, None),
+            ("surprised", 0.6, None),
         ])
 
     def _b_wave(self):
@@ -555,14 +569,15 @@ class Poo:
         ])
 
     def _b_hop(self):
-        def jump():
-            self.squash.value = 0.78     # crouch first - anticipation
+        """A little kick to the swing, like she pushed off with her feet."""
+        def kick():
+            self.squash.value = 0.78
             self.squash.nudge(4.0)
-            self.vy = 700.0
-            self.on_ground = False
+            self.omega = clamp(self.omega + random.choice([-1, 1]) * 1.6,
+                               -MAX_OMEGA, MAX_OMEGA)
         return Behaviour("hop", [
             ("curious", 0.22, None),
-            ("excited", 0.5, jump),
+            ("excited", 0.5, kick),
         ])
 
     def _b_smile(self):
@@ -632,70 +647,35 @@ class Poo:
         self.particles = out
 
     # ------------------------------------------------------------ physics ----
-    def floor_y(self):
-        return self.H * 0.13
+    def _pendulum_pos(self, theta=None):
+        theta = self.theta if theta is None else theta
+        anchor_y = self.H + STRING_SLACK
+        x = self.anchor_x + self.string_len * math.sin(theta)
+        y = anchor_y - self.string_len * math.cos(theta)
+        return x, y
 
     def _step_physics(self, dt):
         if self.held:
-            self.on_ground = False
             return
 
-        self.vy += GRAVITY * dt
-        self.vx += math.sin(self.tilt) * TILT_ACCEL * dt
-        self.vx -= self.vx * AIR_DRAG * dt
+        # Tilting the phone rotates gravity relative to the phone's frame, so
+        # the pendulum's rest angle shifts toward the tilt - exactly what
+        # happens to a real pendant on a string when you tip what it hangs
+        # from.
+        rest = self.tilt * TILT_INFLUENCE
+        omega_dot = (-(ANGULAR_G / max(self.string_len, 1.0)) * math.sin(self.theta - rest)
+                    - DAMPING * self.omega)
+        self.omega = clamp(self.omega + omega_dot * dt, -MAX_OMEGA, MAX_OMEGA)
+        self.theta += self.omega * dt
 
-        self.x += self.vx * dt
-        self.y += self.vy * dt
+        prev_x = self.x
+        self.x, self.y = self._pendulum_pos()
 
-        margin = self.W * 0.12
-        if self.x < margin:
-            self.x = margin
-            self.vx = -self.vx * RESTITUTION
-            self.jiggle.nudge(8)
-        elif self.x > self.W - margin:
-            self.x = self.W - margin
-            self.vx = -self.vx * RESTITUTION
-            self.jiggle.nudge(8)
-
-        floor = self.floor_y()
-        if self.y <= floor:
-            impact = -self.vy
-            self.y = floor
-            if impact > SETTLE_SPEED:
-                self.vy = impact * RESTITUTION
-                self.on_ground = False
-                self._land(impact)
-            else:
-                self.vy = 0.0
-                if not self.on_ground:
-                    self._land(impact)
-                self.on_ground = True
-                self.vx *= FRICTION
-        else:
-            self.on_ground = False
-
-        # rolling: fast horizontal motion on the ground spins her
-        if self.on_ground and abs(self.vx) > ROLL_SPEED:
-            self.spin = (self.spin - self.vx * dt * 0.55) % 360.0
-        else:
-            self.spin *= 0.86 if abs(self.spin) > 0.5 else 0.0
-
-    def _land(self, impact):
-        strength = clamp(impact / 1400.0, 0.05, 1.0)
-        self.squash.value = 1.0 - 0.34 * strength
-        self.squash.nudge(4.0 * strength)
-        self.jiggle.nudge(16.0 * strength)     # ears keep going after the body
-        self.lean.nudge(random.uniform(-1, 1) * 22 * strength)
-
-        if impact > SPLAT_SPEED:
-            self.start_behaviour(Behaviour("splat", [
-                ("splat", 1.1, lambda: self.say("oof", 1.0)),
-                ("surprised", 0.6, None),
-                ("curious", 0.5, None),
-            ], interruptible=False), force=True)
-            self.drives.jostle()
-        elif impact > 700:
-            self.start_behaviour(self._b_startled())
+        # she nudges her own jiggle a little when swinging fast, so a hard
+        # push still reads as physical even without a floor to land on
+        speed = abs(self.x - prev_x) / max(dt, 1 / 240.0)
+        if speed > 260:
+            self.jiggle.nudge(min(speed * 0.01, 6.0))
 
     # --------------------------------------------------------------- tick ----
     def update(self, dt):
@@ -720,34 +700,31 @@ class Poo:
         self._step_physics(dt)
         self._step_particles(dt)
 
-        # falling pose whenever she is genuinely airborne and moving down
-        airborne = (not self.on_ground) and (not self.held) and self.vy < -240
+        swinging_hard = abs(self.omega) > 3.0
 
         if self.behaviour is not None:
             pose, _dur, fn = self.behaviour.current()
             if self.behaviour.t == 0.0 and fn:
                 fn()
-            self.set_pose("falling" if airborne else pose)
+            self.set_pose(pose)
             if self.behaviour.advance(dt):
                 self.behaviour = None
         else:
-            if airborne:
-                self.set_pose("falling", fade=0.06)
-            elif self.held:
+            if self.held:
                 self.set_pose("surprised")
-            elif self.t < self.dizzy_until:
+            elif self.t < self.dizzy_until or swinging_hard:
                 self.set_pose("surprised")
             elif idle > SLEEPY_AFTER or self.drives.sleepiness > 0.82:
                 self.set_pose("sleepy")
             else:
                 self._resting_pose()
 
-            if self.t >= self.next_idle_at and not airborne and self.on_ground:
+            if self.t >= self.next_idle_at and not self.held and not swinging_hard:
                 self.start_behaviour(self._pick_idle())
                 gap = IDLE_ACT_MIN + (IDLE_ACT_MAX - IDLE_ACT_MIN) * (1 - self.drives.curiosity)
-                self.next_idle_at = self.t + random.uniform(gap * 0.6, gap)
+                self.next_idle_at = self.t + random.uniform(gap * 0.7, gap)
 
-        self._step_blink(airborne)
+        self._step_blink(swinging_hard)
 
         if self.t > self.speech_until:
             self.speech = ""
@@ -756,13 +733,6 @@ class Poo:
                        self.ear_l, self.ear_r, self.sprout, self.blush):
             spring.update(dt)
         self.blush.target *= 0.995
-
-        # an ear twitches by itself now and then
-        if self.t >= self._next_flick:
-            self._next_flick = self.t + random.uniform(3.0, 9.0)
-            if self.behaviour is None and self.on_ground:
-                (self.ear_l if random.random() < 0.5 else self.ear_r).nudge(
-                    random.choice([-40.0, 40.0]))
 
         # gaze drifts back to centre when nothing is happening
         if idle > 3.0:
@@ -780,14 +750,14 @@ class Poo:
         else:
             self.set_pose("neutral")
 
-    def _step_blink(self, airborne):
+    def _step_blink(self, swinging_hard):
         if self.blink_until > 0:
             if self.t >= self.blink_until:
                 self.blink_until = -1.0
                 self.next_blink_at = self.t + random.uniform(BLINK_MIN, BLINK_MAX)
                 self._resting_pose()
             return
-        if airborne or self.held or self.behaviour is not None:
+        if swinging_hard or self.held or self.behaviour is not None:
             return
         if self.t < self.next_blink_at:
             return
@@ -804,21 +774,20 @@ class Poo:
         scale_y = sq * (1.0 + breath)
         scale_x = (1.0 / max(sq, 0.35)) * (1.0 - breath * 0.55)
 
-        # A creature sitting on the floor is planted. Unmotivated idle rotation
-        # is what made her read as floating, so it is cut while she is grounded.
-        planted = 0.34 if (self.on_ground and not self.held) else 1.0
+        # she banks INTO the swing, like she is hanging from the string, not
+        # rotating freely on her own - the angle follows theta directly
         wobble = math.sin(self.t * 15.0) * self.jiggle.value * 0.16
-        rot = clamp(self.lean.value + wobble
-                    + math.sin(self.t * 0.55) * 1.4 * planted, -30, 30)
-        rot += self.spin
+        swing_deg = math.degrees(self.theta) if not self.held else 0.0
+        rot = clamp(self.lean.value + wobble + swing_deg * 0.5, -40, 40)
 
+        anchor_y = self.H + STRING_SLACK
         return {
             "x": self.x, "y": self.y,
+            "anchor_x": self.anchor_x, "anchor_y": anchor_y,
             "scale_x": scale_x, "scale_y": scale_y,
             "rotation": rot,
             "pose": self.pose, "prev_pose": self.prev_pose, "fade": self.fade,
             "gaze": self.gaze_x.value,
-            "shadow": clamp(1.0 - (self.y - self.floor_y()) / (self.H * 0.5), 0.0, 1.0),
             "particles": self.particles,
             "ear_l": self.ear_l.value,
             "ear_r": self.ear_r.value,

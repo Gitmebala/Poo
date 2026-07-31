@@ -11,8 +11,7 @@
   "sprout": [
    309.5,
    264.6
-  ],
-  "widest_row": 453
+  ]
  },
  "content": {
   "ear_l": [
@@ -26,8 +25,7 @@
   "sprout": [
    309.5,
    264.44
-  ],
-  "widest_row": 466
+  ]
  },
  "happy": {
   "ear_l": [
@@ -41,8 +39,7 @@
   "sprout": [
    309.5,
    264.6
-  ],
-  "widest_row": 443
+  ]
  },
  "curious": {
   "ear_l": [
@@ -56,8 +53,7 @@
   "sprout": [
    310.0,
    264.6
-  ],
-  "widest_row": 450
+  ]
  },
  "lookup": {
   "ear_l": [
@@ -71,8 +67,7 @@
   "sprout": [
    309.5,
    264.6
-  ],
-  "widest_row": 455
+  ]
  },
  "wink": {
   "ear_l": [
@@ -86,8 +81,7 @@
   "sprout": [
    310.0,
    264.6
-  ],
-  "widest_row": 454
+  ]
  },
  "sleepy": {
   "ear_l": [
@@ -101,8 +95,7 @@
   "sprout": [
    309.0,
    276.36
-  ],
-  "widest_row": 475
+  ]
  },
  "shy": {
   "ear_l": [
@@ -116,8 +109,7 @@
   "sprout": [
    309.0,
    264.6
-  ],
-  "widest_row": 461
+  ]
  },
  "surprised": {
   "ear_l": [
@@ -131,8 +123,7 @@
   "sprout": [
    310.0,
    264.44
-  ],
-  "widest_row": 462
+  ]
  },
  "excited": {
   "ear_l": [
@@ -146,7 +137,6 @@
   "sprout": [
    310.0,
    241.07999999999998
-  ],
-  "widest_row": 430
+  ]
  }
 }

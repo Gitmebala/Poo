@@ -13,8 +13,8 @@ from kivy.clock import Clock
 from kivy.core.image import Image as CoreImage
 from kivy.core.text import Label as CoreLabel
 from kivy.core.window import Window
-from kivy.graphics import (Color, Ellipse, PopMatrix, PushMatrix, Rectangle,
-                           Rotate, Scale, Translate)
+from kivy.graphics import (Color, Ellipse, Line, PopMatrix, PushMatrix,
+                           Rectangle, Rotate, Scale, Translate)
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.button import Button
 from kivy.uix.floatlayout import FloatLayout
@@ -23,9 +23,9 @@ from kivy.uix.widget import Widget
 
 import poo_engine as pe
 
-POO_HEIGHT = 330.0
+POO_HEIGHT = 460.0        # she was too small before - this is a much bigger presence
 LONG_PRESS = 0.55
-TILT_SIGN = -1.0          # flip if she slides the wrong way on the device
+TILT_SIGN = -1.0          # flip if she swings the wrong way on the device
 SHAKE_JOLT = 24.0
 
 
@@ -36,9 +36,11 @@ def glyph(ch, color, size=44):
 
 
 RIG_DIR = os.path.join(pe.ASSET_DIR, "rig")
-RIG_PARTS = ("ear_l", "ear_r", "body", "sprout")
+# draw order matters: body is now the FULL uncut sprite (see rig_layers.py),
+# so it must be drawn FIRST or it would cover the ear/sprout overlays entirely
+RIG_PARTS = ("body", "ear_l", "ear_r", "sprout")
 # measured on the 620x700 sprite canvas, stored as fractions of it
-PIVOTS = {"ear_l": (0.445, 0.438), "ear_r": (0.555, 0.438), "sprout": (0.5, 0.286)}
+PIVOTS = {"ear_l": (0.445, 0.438), "ear_r": (0.555, 0.438), "sprout": (0.5, 0.378)}
 
 
 class PooView(Widget):
@@ -73,8 +75,8 @@ class PooView(Widget):
                      "spark": glyph("✦", (1, .93, .55, 1))}
 
         with self.canvas:
-            self._shadow_c = Color(0, 0, 0, 0)
-            self._shadow = Ellipse(size=(0, 0))
+            self._string_c = Color(0.92, 0.9, 0.97, 0.85)
+            self._string = Line(points=[0, 0, 0, 0], width=1.6)
             PushMatrix()
             self._tr = Translate(0, 0)
             self._rot = Rotate(angle=0, axis=(0, 0, 1))
@@ -146,15 +148,11 @@ class PooView(Widget):
         self._rot.angle = v["rotation"]
         self._sc.x, self._sc.y = v["scale_x"], v["scale_y"]
 
-        # ground shadow shrinks and fades as she rises
-        s = v["shadow"]
-        if s > 0.02:
-            sw = self.w * (0.30 + 0.24 * s)
-            self._shadow_c.rgba = (0, 0, 0, 0.30 * s)
-            self._shadow.size = (sw, sw * 0.2)
-            self._shadow.pos = (v["x"] - sw / 2, self.poo.floor_y() - self.h * 0.44)
-        else:
-            self._shadow_c.a = 0.0
+        # the string she hangs from - runs from the anchor above the screen
+        # down to roughly the top of her head
+        top_x = v["x"] + math.sin(math.radians(v["rotation"])) * self.h * 0.30
+        top_y = v["y"] + self.h * 0.30
+        self._string.points = [v["anchor_x"], v["anchor_y"], top_x, top_y]
 
         for i in self._extra:
             self.canvas.remove(i)
@@ -167,14 +165,8 @@ class PooView(Widget):
                 r = Rectangle(texture=self.ptex[p["kind"]],
                               pos=(p["x"] - sz / 2, p["y"] - sz / 2), size=(sz, sz))
                 self._extra += [c, r]
-
-            if v["speech"]:
-                t = glyph(v["speech"], (1, 1, 1, 1), size=34)
-                c = Color(1, 1, 1, 0.95)
-                r = Rectangle(texture=t, size=t.size,
-                              pos=(v["x"] - t.width / 2,
-                                   v["y"] + self.h * 0.42))
-                self._extra += [c, r]
+            # speech text was cut - it read as debug output, not personality.
+            # her character comes through in what she DOES now, not captions.
 
     def hit(self, x, y):
         v = self.poo.visual()
